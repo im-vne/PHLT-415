@@ -1,0 +1,62 @@
+---
+title: "Attendance"
+author: "Valerie Espinosa"
+date: "2024-08-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## PHLT 415 Attendance
+Import canvas gradebook and upload the attendance.
+
+```{r library, message=FALSE}
+library(readr)
+library(tidyverse)
+```
+
+
+```{r data import, warning=FALSE}
+Canvas_Gradebook <- read_csv("Attendance/Canvas_Gradebook.csv")
+Canvas_Gradebook =  Canvas_Gradebook[-c(1,2),]
+
+# seperate name
+Canvas_Gradebook = Canvas_Gradebook %>% 
+   separate(Student,c("Last_Name","First_Name"),sep=",")
+Canvas_Gradebook$`SIS User ID` = as.character(Canvas_Gradebook$`SIS User ID`)
+```
+
+```{r Attendance Imput}
+#This one contains everyone in all sections
+Attendance = Canvas_Gradebook %>% select(Last_Name, First_Name,`SIS User ID`,Section,`Participation and Attendance Current Score`)
+#order by section then by last name and first name
+
+```
+
+```{r}
+Attendance = Attendance %>% arrange(Section,Last_Name,First_Name)
+
+#n is the total amount of days in class
+n = 43
+
+#create new Participation column for every day
+Attendance = cbind(Attendance, replicate(n,Attendance$`Participation and Attendance Current Score`))
+
+```
+
+```{r}
+Attendance = Attendance[-c(`Participation and Attendance Current Score`)]
+Attendance[is.na(Attendance)] = 0
+
+```
+
+```{r}
+Attendance = Attendance %>%
+   mutate( `Participation and Attendance Current Score` = sum(c_across(where(is.numeric))))
+```
+
+```{r}
+write.table(Attendance, "clipboard", sep="\t", row.names=TRUE, col.names=TRUE)
+```
