@@ -1,0 +1,1144 @@
+---
+title: "Discussion Grader"
+author: "Valerie Espinosa"
+date: "2024-09-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## PHLT 415 Discussion
+Import Interative Reading Analytics
+
+```{r library, message=FALSE}
+library(readr)
+library(tidyverse)
+library(readxl)
+
+Canvas_Gradebook <- read_csv("Attendance/Canvas_Gradebook.csv")
+Canvas_Gradebook =  Canvas_Gradebook[-c(1,2),]
+Canvas_Gradebook$`SIS User ID` = as.character(Canvas_Gradebook$`SIS User ID`)
+
+Canvas_Gradebook <- Canvas_Gradebook %>%
+  mutate(Student = sapply(strsplit(Student, ", "), function(x) paste(x[2], x[1])))
+
+Roster = Canvas_Gradebook %>% select(Student, `SIS User ID`)
+
+colnames(Roster) = c("Student name", "Student ID")
+
+Roster$`Student ID` = as.character(Roster$`Student ID`)
+
+
+```
+
+Count the number of posts and how many responses they had
+```{r}
+
+result = Chpt_5_415 %>% left_join(Roster)
+
+
+merged_data <- result %>%
+  mutate(Student_ID = ifelse(is.na(`Student ID_old`), `Student ID_new`, `Student ID_old`)) %>%
+  select(`Student name`, Student_ID)
+
+
+
+Chpt_5_415_Discussion <- read_excel("Interactive Readings/Chapter 5 - Legislation, Regulations, and Policy Guidance - Analytics (1).xlsx", sheet = "Discussion threads")
+
+Chpt_5_415_Discussion %>% group_by()
+
+
+```
+
+
+```{r}
+library(shiny)
+library(readxl)
+library(writexl)
+library(dplyr)
+
+# Define the UI layout for the app with one tab for Teacher input
+ui <- fluidPage(
+  titlePanel("Student Grading App"),
+  
+  # Single tab for Teacher input
+  tabsetPanel(
+    tabPanel("Teacher Input",
+      sidebarLayout(
+        sidebarPanel(
+          fileInput("file", "Upload Excel File", accept = c(".xlsx")),  # Upload Excel file
+          selectInput("teacher_student_select", "Select Student", choices = NULL),  # Dropdown for teacher
+          numericInput("teacher_grade", "Teacher Grade (Reflection)", value = 0, min = 0, max = 35),  # Teacher's reflection grade input
+          actionButton("update_teacher_grades", "Update Teacher Grade"),  # Button to save teacher's grade
+          actionButton("clear_teacher_selection", "Clear Selection"),  # Button to clear the selected student
+          downloadButton("download_data", "Download Graded Excel")  # Button to download updated Excel
+        ),
+        
+        mainPanel(
+          h4("Selected Student Reflection"),  # Header for reflection view
+          textOutput("teacherReflectionText"),  # Display reflection for selected student
+          h4("Posts and Discussions Count"),  # Header for posts and discussions count
+          verbatimTextOutput("postDiscussionCount"),  # Display posts and discussions count
+          h4("Total Grade Calculation"),  # Header for total grade calculation
+          verbatimTextOutput("totalGrade")  # Display total grade calculation
+        )
+      )
+    )
+  )
+)
+
+# Define the server logic for the app
+server <- function(input, output, session) {
+  
+  # Reactive value to store the uploaded data and updated grades
+  reactive_data <- reactiveValues(
+    sheet3 = NULL,
+    sheet4 = NULL,
+    updated_reflections = NULL
+  )
+  
+  # Load and process the Excel file
+  observeEvent(input$file, {
+    req(input$file)  # Ensure the file is uploaded
+    
+    # Read data from the uploaded Excel file
+    reactive_data$sheet3 <- read_excel(input$file$datapath, sheet = "Discussion threads")
+    reactive_data$sheet4 <- read_excel(input$file$datapath, sheet = "Reflections")
+    
+    # Initialize updated_reflections with data from Sheet 4
+    reactive_data$updated_reflections <- reactive_data$sheet4 %>%
+      mutate(Teacher_Grade = 0)  # Add Teacher_Grade column if not present
+  })
+  
+  # Populate the dropdown menu with unique student names from Sheet 3
+  observe({
+    req(reactive_data$sheet3)  # Ensure data from Sheet 3 is available
+    student_names <- unique(reactive_data$sheet3$`Student name`)  # Extract unique student names
+    updateSelectInput(session, "teacher_student_select", choices = student_names)  # Update teacher's dropdown
+  })
+  
+  # Filter and show the reflection for the selected student
+  teacher_selected_reflection <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    req(reactive_data$sheet4)  # Ensure data from Sheet 4 is available
+    reflection_df <- reactive_data$sheet4 %>% 
+      filter(`Student name` == input$teacher_student_select) %>% 
+      select(Reflection)  # Extract the 'Reflection' column
+    
+    # Check if the student has any reflections
+    if (nrow(reflection_df) == 0) {
+      return("No reflections found for the selected student.")  # Return a message if no reflections are found
+    }
+    
+    # Convert the reflections to a single string (assuming there might be multiple entries)
+    reflection_text <- paste(reflection_df$Reflection, collapse = "\n")  
+    return(reflection_text)
+  })
+  
+  # Render the reflection text for the selected student
+  output$teacherReflectionText <- renderText({
+    teacher_selected_reflection()  # Display the filtered reflection data for the teacher
+  })
+  
+  # Calculate and display the count of posts and discussions for the selected student
+  post_discussion_count <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected
+    student_data <- reactive_data$sheet3 %>% filter(`Student name` == input$teacher_student_select)  # Filter data for selected student
+    posts <- sum(!is.na(student_data$Post))  # Count non-missing posts
+    discussions <- sum(!is.na(student_data$Discussion))  # Count non-missing discussions
+    return(paste("Posts:", posts, "\nDiscussions:", discussions))
+  })
+  
+  # Render the post and discussion count
+  output$postDiscussionCount <- renderText({
+    post_discussion_count()  # Display the count of posts and discussions
+  })
+  
+
+# Calculate the total grade
+calculate_total_grade <- reactive({
+  req(input$teacher_student_select)  # Ensure a student is selected
+  
+  # Safely filter the selected student's data from sheet3
+  student_data <- reactive_data$sheet3 %>%
+    filter(`Student name` == input$teacher_student_select)
+  
+  # Check if the columns for Post and Discussion exist and calculate their counts
+  if ("Post" %in% colnames(student_data) && "Discussion" %in% colnames(student_data)) {
+    posts_count <- sum(!is.na(student_data$Post))  # Count non-missing posts
+    discussions_count <- sum(!is.na(student_data$Discussion))  # Count non-missing discussions
+  } else {
+    # Return 0 if these columns don't exist
+    posts_count <- 0
+    discussions_count <- 0
+  }
+
+  # Calculate the grade based on posts and discussions
+  posts_and_discussions_grade <- ifelse(posts_count > 0 & discussions_count > 0, 25, 0)
+  
+  # Calculate the total grade by adding the teacher's grade
+  total_grade <- posts_and_discussions_grade + input$teacher_grade
+  
+  return(paste("Total Grade: ", total_grade, " / 60"))
+})
+
+# Render the total grade calculation
+output$totalGrade <- renderText({
+  calculate_total_grade()  # Display the total grade calculation
+})
+  
+  # Update teacher's grade when the button is clicked
+  observeEvent(input$update_teacher_grades, {
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    req(teacher_selected_reflection())  # Ensure the student's reflection is available
+    
+    reflections_df <- reactive_data$updated_reflections  # Load the reflection data
+    
+    # Update the teacher's grade for the selected student in the reflection data
+    reflections_df <- reflections_df %>%
+      mutate(Teacher_Grade = ifelse(`Student name` == input$teacher_student_select, input$teacher_grade, Teacher_Grade))
+    
+    # Save the updated reflection data with teacher's grade
+    reactive_data$updated_reflections <- reflections_df
+  })
+  
+  # Clear the teacher's selection and input fields
+  observeEvent(input$clear_teacher_selection, {
+    updateSelectInput(session, "teacher_student_select", selected = NULL)  # Clear student selection
+    updateNumericInput(session, "teacher_grade", value = 0)  # Reset grade input
+  })
+  
+  # Provide a download of the updated Excel file with the new sheet
+  output$download_data <- downloadHandler(
+    filename = function() {
+      paste("graded_reflections", Sys.Date(), ".xlsx", sep = "")  # Name the downloaded file with the current date
+    },
+    content = function(file) {
+      req(reactive_data$updated_reflections)  # Ensure the updated reflection data is available
+      
+      # Add the total grade sheet to the updated Excel file
+      write_xlsx(list(
+        "Discussion and Reflections" = reactive_data$updated_reflections  # Add updated reflections with grades
+      ), file)
+    }
+  )
+}
+
+# Run the Shiny application
+shinyApp(ui = ui, server = server)
+```
+
+
+```{r}
+library(shiny)
+library(readxl)
+library(writexl)
+library(dplyr)
+
+# Define the UI layout for the app with one tab for Teacher input
+ui <- fluidPage(
+  titlePanel("Student Grading App"),
+  
+  # Single tab for Teacher input
+  tabsetPanel(
+    tabPanel("Teacher Input",
+      sidebarLayout(
+        sidebarPanel(
+          fileInput("file", "Upload Excel File", accept = c(".xlsx")),  # Upload Excel file
+          selectInput("teacher_student_select", "Select Student", choices = NULL),  # Dropdown for teacher
+          numericInput("teacher_grade", "Teacher Grade (Reflection)", value = 0, min = 0, max = 35),  # Teacher's reflection grade input
+          actionButton("update_teacher_grades", "Update Teacher Grade"),  # Button to save teacher's grade
+          actionButton("clear_teacher_selection", "Clear Selection"),  # Button to clear the selected student
+          downloadButton("download_data", "Download Graded Excel")  # Button to download updated Excel
+        ),
+        
+        mainPanel(
+          h4("Selected Student Reflection"),  # Header for reflection view
+          textOutput("teacherReflectionText"),  # Display reflection for selected student
+          h4("Posts and Discussions Count"),  # Header for posts and discussions count
+          verbatimTextOutput("postDiscussionCount"),  # Display posts and discussions count
+          h4("Total Grade Calculation"),  # Header for total grade calculation
+          verbatimTextOutput("totalGrade")  # Display total grade calculation
+        )
+      )
+    )
+  )
+)
+
+# Define the server logic for the app
+server <- function(input, output, session) {
+  
+  # Reactive value to store the uploaded data and updated grades
+  reactive_data <- reactiveValues(
+    sheet3 = NULL,
+    sheet4 = NULL,
+    updated_reflections = NULL
+  )
+  
+  # Load and process the Excel file
+  observeEvent(input$file, {
+    req(input$file)  # Ensure the file is uploaded
+    
+    # Read data from the uploaded Excel file
+    tryCatch({
+      reactive_data$sheet3 <- read_excel(input$file$datapath, sheet = "Discussion threads")
+      reactive_data$sheet4 <- read_excel(input$file$datapath, sheet = "Reflections")
+      
+      # Initialize updated_reflections with data from Sheet 4
+      reactive_data$updated_reflections <- reactive_data$sheet4 %>%
+        mutate(Teacher_Grade = ifelse(is.null(Teacher_Grade), 0, Teacher_Grade))  # Add Teacher_Grade column if not present
+      
+    }, error = function(e) {
+      showModal(modalDialog(
+        title = "Error",
+        "Please upload an Excel file with the correct sheet names: 'Discussion threads' and 'Reflections'.",
+        easyClose = TRUE
+      ))
+    })
+  })
+  
+  # Populate the dropdown menu with unique student names from Sheet 3
+  observe({
+    req(reactive_data$sheet3)  # Ensure data from Sheet 3 is available
+    student_names <- unique(reactive_data$sheet3$`Student name`)  # Extract unique student names
+    updateSelectInput(session, "teacher_student_select", choices = student_names)  # Update teacher's dropdown
+  })
+  
+  # Filter and show the reflection for the selected student
+  teacher_selected_reflection <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    req(reactive_data$sheet4)  # Ensure data from Sheet 4 is available
+    reflection_df <- reactive_data$sheet4 %>% 
+      filter(`Student name` == input$teacher_student_select) %>% 
+      select(Reflection)  # Extract the 'Reflection' column
+    
+    # Check if the student has any reflections
+    if (nrow(reflection_df) == 0) {
+      return("No reflections found for the selected student.")  # Return a message if no reflections are found
+    }
+    
+    # Convert the reflections to a single string (assuming there might be multiple entries)
+    reflection_text <- paste(reflection_df$Reflection, collapse = "\n")  
+    return(reflection_text)
+  })
+  
+  # Render the reflection text for the selected student
+  output$teacherReflectionText <- renderText({
+    teacher_selected_reflection()  # Display the filtered reflection data for the teacher
+  })
+  
+  # Calculate and display the count of posts and discussions for the selected student
+  post_discussion_count <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected
+    student_data <- reactive_data$sheet3 %>% filter(`Student name` == input$teacher_student_select)  # Filter data for selected student
+    posts <- sum(!is.na(student_data$Post))  # Count non-missing posts
+    discussions <- sum(!is.na(student_data$Discussion))  # Count non-missing discussions
+    return(paste("Posts:", posts, "\nDiscussions:", discussions))
+  })
+  
+  # Render the post and discussion count
+  output$postDiscussionCount <- renderText({
+    post_discussion_count()  # Display the count of posts and discussions
+  })
+  
+  # Calculate the total grade
+  calculate_total_grade <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected
+    posts_and_discussions_grade <- ifelse(sum(!is.na(reactive_data$sheet3 %>% filter(`Student name` == input$teacher_student_select)$Post)) > 0 & sum(!is.na(reactive_data$sheet3 %>% filter(`Student name` == input$teacher_student_select)$Discussion)) > 0, 25, 0)
+    total_grade <- posts_and_discussions_grade + input$teacher_grade
+    return(paste("Total Grade: ", total_grade, " / 60"))
+  })
+  
+  # Render the total grade calculation
+  output$totalGrade <- renderText({
+    calculate_total_grade()  # Display the total grade calculation
+  })
+  
+  # Update teacher's grade when the button is clicked
+  observeEvent(input$update_teacher_grades, {
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    req(teacher_selected_reflection())  # Ensure the student's reflection is available
+    
+    reflections_df <- reactive_data$updated_reflections  # Load the reflection data
+    
+    # Update the teacher's grade for the selected student in the reflection data
+    reflections_df <- reflections_df %>%
+      mutate(Teacher_Grade = ifelse(`Student name` == input$teacher_student_select, input$teacher_grade, Teacher_Grade))
+    
+    # Save the updated reflection data with teacher's grade
+    reactive_data$updated_reflections <- reflections_df
+  })
+  
+  # Clear the teacher's selection and input fields
+  observeEvent(input$clear_teacher_selection, {
+    updateSelectInput(session, "teacher_student_select", selected = NULL)  # Clear student selection
+    updateNumericInput(session, "teacher_grade", value = 0)  # Reset grade input
+  })
+  
+  # Provide a download of the updated Excel file with the new sheet
+  output$download_data <- downloadHandler(
+    filename = function() {
+      paste("graded_reflections", Sys.Date(), ".xlsx", sep = "")  # Name the downloaded file with the current date
+    },
+    content = function(file) {
+      req(reactive_data$updated_reflections)  # Ensure the updated reflection data is available
+      
+      # Add the total grade sheet to the updated Excel file
+      write_xlsx(list(
+        "Discussion and Reflections" = reactive_data$updated_reflections  # Add updated reflections with grades
+      ), file)
+    }
+  )
+}
+
+# Run the Shiny application
+shinyApp(ui = ui, server = server)
+```
+
+```{r}
+library(shiny)
+library(readxl)
+library(writexl)
+library(dplyr)
+
+# Define the UI layout for the app with one tab for Teacher input
+ui <- fluidPage(
+  titlePanel("Student Grading App"),
+  
+  # JavaScript to handle arrow key navigation
+  tags$script(HTML("
+    $(document).on('keydown', function(e) {
+      var select = $('#teacher_student_select');  // Get the select input
+      var options = select.find('option');  // Find all the student options
+      var selectedIndex = select.prop('selectedIndex');  // Get the current selected index
+      
+      if (e.key === 'ArrowDown') {
+        // Move to the next student, if not at the end
+        if (selectedIndex < options.length - 1) {
+          select.prop('selectedIndex', selectedIndex + 1).change();  // Increment and trigger change
+        }
+      } else if (e.key === 'ArrowUp') {
+        // Move to the previous student, if not at the beginning
+        if (selectedIndex > 0) {
+          select.prop('selectedIndex', selectedIndex - 1).change();  // Decrement and trigger change
+        }
+      }
+    });
+  ")),
+  
+  # Single tab for Teacher input
+  tabsetPanel(
+    tabPanel("Teacher Input",
+      sidebarLayout(
+        sidebarPanel(
+          fileInput("file", "Upload Excel File", accept = c(".xlsx")),  # Upload Excel file
+          selectInput("teacher_student_select", "Select Student", choices = NULL),  # Dropdown for teacher
+          numericInput("teacher_grade", "Teacher Grade (Reflection)", value = 0, min = 0, max = 35),  # Teacher's reflection grade input
+          actionButton("update_teacher_grades", "Update Teacher Grade"),  # Button to save teacher's grade
+          actionButton("clear_teacher_selection", "Clear Selection"),  # Button to clear the selected student
+          downloadButton("download_data", "Download Graded Excel")  # Button to download updated Excel
+        ),
+        
+        mainPanel(
+          h4("Selected Student Reflection"),  # Header for reflection view
+          textOutput("teacherReflectionText"),  # Display reflection for selected student
+          h4("Posts and Discussions Count"),  # Header for posts and discussions count
+          verbatimTextOutput("postDiscussionCount"),  # Display posts and discussions count
+          h4("Total Grade Calculation"),  # Header for total grade calculation
+          verbatimTextOutput("totalGrade")  # Display total grade calculation
+        )
+      )
+    )
+  )
+)
+
+# Define the server logic for the app
+server <- function(input, output, session) {
+  
+  # Reactive value to store the uploaded data and updated grades
+  reactive_data <- reactiveValues(
+    sheet3 = NULL,
+    sheet4 = NULL,
+    updated_reflections = NULL
+  )
+  
+  # Load and process the Excel file
+  observeEvent(input$file, {
+    req(input$file)  # Ensure the file is uploaded
+    
+    # Read data from the uploaded Excel file
+    reactive_data$sheet3 <- read_excel(input$file$datapath, sheet = "Discussion threads")
+    reactive_data$sheet4 <- read_excel(input$file$datapath, sheet = "Reflections")
+    
+    # Initialize updated_reflections with data from Sheet 4
+    reactive_data$updated_reflections <- reactive_data$sheet4 %>%
+      mutate(Teacher_Grade = 0)  # Add Teacher_Grade column if not present
+  })
+  
+  # Populate the dropdown menu with unique student names from Sheet 3
+  observe({
+    req(reactive_data$sheet3)  # Ensure data from Sheet 3 is available
+    student_names <- unique(reactive_data$sheet3$`Student name`)  # Extract unique student names
+    updateSelectInput(session, "teacher_student_select", choices = student_names)  # Update teacher's dropdown
+  })
+  
+  # Filter and show the reflection for the selected student
+  teacher_selected_reflection <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    req(reactive_data$sheet4)  # Ensure data from Sheet 4 is available
+    reflection_df <- reactive_data$sheet4 %>% 
+      filter(`Student name` == input$teacher_student_select) %>% 
+      select(Reflection)  # Extract the 'Reflection' column
+    
+    # Check if the student has any reflections
+    if (nrow(reflection_df) == 0) {
+      return("No reflections found for the selected student.")  # Return a message if no reflections are found
+    }
+    
+    # Convert the reflections to a single string (assuming there might be multiple entries)
+    reflection_text <- paste(reflection_df$Reflection, collapse = "\n")  
+    return(reflection_text)
+  })
+  
+  # Render the reflection text for the selected student
+  output$teacherReflectionText <- renderText({
+    teacher_selected_reflection()  # Display the filtered reflection data for the teacher
+  })
+  
+  # Calculate and display the count of posts and discussions for the selected student
+  post_discussion_count <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected
+    student_data <- reactive_data$sheet3 %>% filter(`Student name` == input$teacher_student_select)  # Filter data for selected student
+    posts <- sum(!is.na(student_data$Post))  # Count non-missing posts
+    discussions <- sum(!is.na(student_data$Discussion))  # Count non-missing discussions
+    return(paste("Posts:", posts, "\nDiscussions:", discussions))
+  })
+  
+  # Render the post and discussion count
+  output$postDiscussionCount <- renderText({
+    post_discussion_count()  # Display the count of posts and discussions
+  })
+  
+  # Calculate the total grade
+  calculate_total_grade <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected
+    student_data <- reactive_data$sheet3 %>%
+      filter(`Student name` == input$teacher_student_select)
+    
+    # Check if the columns for Post and Discussion exist and calculate their counts
+    if ("Post" %in% colnames(student_data) && "Discussion" %in% colnames(student_data)) {
+      posts_count <- sum(!is.na(student_data$Post))  # Count non-missing posts
+      discussions_count <- sum(!is.na(student_data$Discussion))  # Count non-missing discussions
+    } else {
+      posts_count <- 0
+      discussions_count <- 0
+    }
+
+    # Calculate the grade based on posts and discussions
+    posts_and_discussions_grade <- ifelse(posts_count > 0 & discussions_count > 0, 25, 0)
+    
+    # Calculate the total grade by adding the teacher's grade
+    total_grade <- posts_and_discussions_grade + input$teacher_grade
+    
+    return(paste("Total Grade: ", total_grade, " / 60"))
+  })
+  
+  # Render the total grade calculation
+  output$totalGrade <- renderText({
+    calculate_total_grade()  # Display the total grade calculation
+  })
+  
+  # Update teacher's grade when the button is clicked
+  observeEvent(input$update_teacher_grades, {
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    req(teacher_selected_reflection())  # Ensure the student's reflection is available
+    
+    reflections_df <- reactive_data$updated_reflections  # Load the reflection data
+    
+    # Update the teacher's grade for the selected student in the reflection data
+    reflections_df <- reflections_df %>%
+      mutate(Teacher_Grade = ifelse(`Student name` == input$teacher_student_select, input$teacher_grade, Teacher_Grade))
+    
+    # Save the updated reflection data with teacher's grade
+    reactive_data$updated_reflections <- reflections_df
+  })
+  
+  # Clear the teacher's selection and input fields
+  observeEvent(input$clear_teacher_selection, {
+    updateSelectInput(session, "teacher_student_select", selected = NULL)  # Clear student selection
+    updateNumericInput(session, "teacher_grade", value = 0)  # Reset grade input
+  })
+  
+  # Provide a download of the updated Excel file with the new sheet
+  output$download_data <- downloadHandler(
+    filename = function() {
+      paste("graded_reflections", Sys.Date(), ".xlsx", sep = "")  # Name the downloaded file with the current date
+    },
+    content = function(file) {
+      req(reactive_data$updated_reflections)  # Ensure the updated reflection data is available
+      
+      # Add the total grade sheet to the updated Excel file
+      write_xlsx(list(
+        "Discussion and Reflections" = reactive_data$updated_reflections  # Add updated reflections with grades
+      ), file)
+    }
+  )
+}
+
+# Run the Shiny application
+shinyApp(ui = ui, server = server)
+```
+
+
+```{r}
+library(shiny)
+library(readxl)
+library(writexl)
+library(dplyr)
+
+# Define the UI layout for the app with one tab for Teacher input
+ui <- fluidPage(
+  titlePanel("Student Grading App"),
+  
+  # JavaScript to handle arrow key navigation
+  tags$script(HTML("
+    $(document).on('keydown', function(e) {
+      var select = $('#teacher_student_select');  // Get the select input
+      var options = select.find('option');  // Find all the student options
+      var selectedIndex = select.prop('selectedIndex');  // Get the current selected index
+      
+      if (e.key === 'ArrowDown') {
+        // Move to the next student, if not at the end
+        if (selectedIndex < options.length - 1) {
+          select.prop('selectedIndex', selectedIndex + 1).change();  // Increment and trigger change
+        }
+      } else if (e.key === 'ArrowUp') {
+        // Move to the previous student, if not at the beginning
+        if (selectedIndex > 0) {
+          select.prop('selectedIndex', selectedIndex - 1).change();  // Decrement and trigger change
+        }
+      }
+    });
+  ")),
+  
+  # Single tab for Teacher input
+  tabsetPanel(
+    tabPanel("Teacher Input",
+      sidebarLayout(
+        sidebarPanel(
+          fileInput("file", "Upload Excel File", accept = c(".xlsx")),  # Upload Excel file
+          selectInput("teacher_student_select", "Select Student", choices = NULL),  # Dropdown for teacher
+          numericInput("teacher_grade", "Teacher Grade (Reflection)", value = 0, min = 0, max = 35),  # Teacher's reflection grade input
+          actionButton("clear_teacher_selection", "Clear Selection"),  # Button to clear the selected student
+          downloadButton("download_data", "Download Graded Excel")  # Button to download updated Excel
+        ),
+        
+        mainPanel(
+          h4("Selected Student Reflection"),  # Header for reflection view
+          textOutput("teacherReflectionText"),  # Display reflection for selected student
+          h4("Posts and Discussions Count"),  # Header for posts and discussions count
+          verbatimTextOutput("postDiscussionCount"),  # Display posts and discussions count
+          h4("Total Grade Calculation"),  # Header for total grade calculation
+          verbatimTextOutput("totalGrade")  # Display total grade calculation
+        )
+      )
+    )
+  )
+)
+
+# Define the server logic for the app
+server <- function(input, output, session) {
+  
+  # Reactive value to store the uploaded data and updated grades
+  reactive_data <- reactiveValues(
+    sheet3 = NULL,
+    sheet4 = NULL,
+    updated_reflections = NULL
+  )
+  
+  # Load and process the Excel file
+  observeEvent(input$file, {
+    req(input$file)  # Ensure the file is uploaded
+    
+    # Read data from the uploaded Excel file
+    reactive_data$sheet3 <- read_excel(input$file$datapath, sheet = "Discussion threads")
+    reactive_data$sheet4 <- read_excel(input$file$datapath, sheet = "Reflections")
+    
+    # Initialize updated_reflections with data from Sheet 4
+    reactive_data$updated_reflections <- reactive_data$sheet4 %>%
+      mutate(Teacher_Grade = 0)  # Add Teacher_Grade column if not present
+  })
+  
+  # Populate the dropdown menu with unique student names from Sheet 3
+  observe({
+    req(reactive_data$sheet3)  # Ensure data from Sheet 3 is available
+    student_names <- unique(reactive_data$sheet3$`Student name`)  # Extract unique student names
+    updateSelectInput(session, "teacher_student_select", choices = student_names)  # Update teacher's dropdown
+  })
+  
+  # Filter and show the reflection for the selected student
+  teacher_selected_reflection <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    req(reactive_data$sheet4)  # Ensure data from Sheet 4 is available
+    reflection_df <- reactive_data$sheet4 %>% 
+      filter(`Student name` == input$teacher_student_select) %>% 
+      select(Reflection)  # Extract the 'Reflection' column
+    
+    # Check if the student has any reflections
+    if (nrow(reflection_df) == 0) {
+      return("No reflections found for the selected student.")  # Return a message if no reflections are found
+    }
+    
+    # Convert the reflections to a single string (assuming there might be multiple entries)
+    reflection_text <- paste(reflection_df$Reflection, collapse = "\n")  
+    return(reflection_text)
+  })
+  
+  # Render the reflection text for the selected student
+  output$teacherReflectionText <- renderText({
+    teacher_selected_reflection()  # Display the filtered reflection data for the teacher
+  })
+  
+  # Calculate and display the count of posts and discussions for the selected student
+  post_discussion_count <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected
+    student_data <- reactive_data$sheet3 %>% filter(`Student name` == input$teacher_student_select)  # Filter data for selected student
+    posts <- sum(!is.na(student_data$Post))  # Count non-missing posts
+    discussions <- sum(!is.na(student_data$Discussion))  # Count non-missing discussions
+    return(paste("Posts:", posts, "\nDiscussions:", discussions))
+  })
+  
+  # Render the post and discussion count
+  output$postDiscussionCount <- renderText({
+    post_discussion_count()  # Display the count of posts and discussions
+  })
+  
+  # Calculate the total grade
+  calculate_total_grade <- reactive({
+    req(input$teacher_student_select)  # Ensure a student is selected
+    student_data <- reactive_data$sheet3 %>%
+      filter(`Student name` == input$teacher_student_select)
+    
+    # Check if the columns for Post and Discussion exist and calculate their counts
+    if ("Post" %in% colnames(student_data) && "Discussion" %in% colnames(student_data)) {
+      posts_count <- sum(!is.na(student_data$Post))  # Count non-missing posts
+      discussions_count <- sum(!is.na(student_data$Discussion))  # Count non-missing discussions
+    } else {
+      posts_count <- 0
+      discussions_count <- 0
+    }
+
+    # Calculate the grade based on posts and discussions
+    posts_and_discussions_grade <- ifelse(posts_count > 0 & discussions_count > 0, 25, 0)
+    
+    # Calculate the total grade by adding the teacher's grade
+    total_grade <- posts_and_discussions_grade + input$teacher_grade
+    
+    return(paste("Total Grade: ", total_grade, " / 60"))
+  })
+  
+  # Render the total grade calculation
+  output$totalGrade <- renderText({
+    calculate_total_grade()  # Display the total grade calculation
+  })
+  
+  # Automatically update the teacher's grade when it's changed
+  observeEvent(input$teacher_grade, {
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    
+    # Update the teacher's grade for the selected student in the reactive data
+    reactive_data$updated_reflections <- reactive_data$updated_reflections %>%
+      mutate(Teacher_Grade = ifelse(`Student name` == input$teacher_student_select, input$teacher_grade, Teacher_Grade))
+  })
+  
+  # When a new student is selected, initialize the grade input based on the stored value
+  observeEvent(input$teacher_student_select, {
+    req(input$teacher_student_select)  # Ensure a student is selected by the teacher
+    
+    # Get the current teacher grade for the selected student
+    current_grade <- reactive_data$updated_reflections %>%
+      filter(`Student name` == input$teacher_student_select) %>%
+      pull(Teacher_Grade)
+    
+    # Update the grade input with the stored value, or 0 if no grade was entered yet
+    updateNumericInput(session, "teacher_grade", value = ifelse(is.na(current_grade), 0, current_grade))
+  })
+  
+  # Clear the teacher's selection and input fields
+  observeEvent(input$clear_teacher_selection, {
+    updateSelectInput(session, "teacher_student_select", selected = NULL)  # Clear student selection
+    updateNumericInput(session, "teacher_grade", value = 0)  # Reset grade input
+  })
+  
+  # Provide a download of the updated Excel file with the new sheet
+  output$download_data <- downloadHandler(
+    filename = function() {
+      paste("graded_reflections", Sys.Date(), ".xlsx", sep = "")  # Name the downloaded file with the current date
+    },
+    content = function(file) {
+      req(reactive_data$updated_reflections)  # Ensure the updated reflection data is available
+      
+      # Add the total grade sheet to the updated Excel file
+      write_xlsx(list(
+        "Discussion and Reflections" = reactive_data$updated_reflections  # Add updated reflections with grades
+      ), file)
+    }
+  )
+}
+
+# Run the Shiny application
+shinyApp(ui = ui, server = server)
+```
+
+```{r}
+library(shiny)
+library(readxl)
+library(writexl)
+library(dplyr)
+
+# Define the UI layout for the app
+ui <- fluidPage(
+  titlePanel("Student Grading App"),
+  
+  # JavaScript to handle arrow key navigation
+  tags$script(HTML("
+    $(document).on('keydown', function(e) {
+      var select = $('#teacher_student_select');  // Get the select input
+      var options = select.find('option');  // Find all the student options
+      var selectedIndex = select.prop('selectedIndex');  // Get the current selected index
+      
+      if (e.key === 'ArrowDown') {
+        if (selectedIndex < options.length - 1) {
+          select.prop('selectedIndex', selectedIndex + 1).change();
+        }
+      } else if (e.key === 'ArrowUp') {
+        if (selectedIndex > 0) {
+          select.prop('selectedIndex', selectedIndex - 1).change();
+        }
+      }
+    });
+  ")),
+  
+  tabsetPanel(
+    tabPanel("Teacher Input",
+      sidebarLayout(
+        sidebarPanel(
+          fileInput("file", "Upload Excel File", accept = c(".xlsx")),  # Upload Excel file
+          selectInput("teacher_student_select", "Select Student", choices = NULL),  # Dropdown for teacher
+          numericInput("teacher_grade", "Teacher Grade (Reflection)", value = 0, min = 0, max = 35),  # Teacher's reflection grade input
+          actionButton("clear_teacher_selection", "Clear Selection"),  # Button to clear the selected student
+          downloadButton("download_data", "Download Graded Excel")  # Button to download updated Excel
+        ),
+        
+        mainPanel(
+          h4("Selected Student Reflection"),
+          textOutput("teacherReflectionText"),  # Display reflection
+          h4("Posts and Discussions Count"),
+          verbatimTextOutput("postDiscussionCount"),  # Display post/discussion count
+          h4("Total Grade Calculation"),
+          verbatimTextOutput("totalGrade")  # Display total grade
+        )
+      )
+    ),
+    
+    # Conditional TA tab (appears when all students have grades)
+    conditionalPanel(
+      condition = "output.allStudentsGraded == true",
+      tabPanel("Teaching Assistant Input",
+        sidebarLayout(
+          sidebarPanel(
+            fileInput("ta_file", "Upload TA Grades", accept = c(".xlsx")),  # TA upload
+            downloadButton("download_data_with_ta", "Download TA & Teacher Grades")  # Download button for both grades
+          ),
+          mainPanel(
+            h4("Teaching Assistant Grades")
+          )
+        )
+      )
+    )
+  )
+)
+
+# Define the server logic for the app
+server <- function(input, output, session) {
+  
+  # Reactive value to store the uploaded data and updated grades
+  reactive_data <- reactiveValues(
+    sheet3 = NULL,
+    sheet4 = NULL,
+    updated_reflections = NULL,
+    ta_grades = NULL
+  )
+  
+  # Load and process the Excel file
+  observeEvent(input$file, {
+    req(input$file)  # Ensure the file is uploaded
+    
+    # Read data from the uploaded Excel file
+    reactive_data$sheet3 <- read_excel(input$file$datapath, sheet = "Discussion threads")
+    reactive_data$sheet4 <- read_excel(input$file$datapath, sheet = "Reflections")
+    
+    # Initialize updated_reflections with data from Sheet 4
+    reactive_data$updated_reflections <- reactive_data$sheet4 %>%
+      mutate(Teacher_Grade = 0)  # Add Teacher_Grade column if not present
+  })
+  
+  # Populate the dropdown menu with unique student names from Sheet 3
+  observe({
+    req(reactive_data$sheet3)  # Ensure data from Sheet 3 is available
+    student_names <- unique(reactive_data$sheet3$`Student name`)  # Extract unique student names
+    updateSelectInput(session, "teacher_student_select", choices = student_names)  # Update teacher's dropdown
+  })
+  
+  # Filter and show the reflection for the selected student
+  teacher_selected_reflection <- reactive({
+    req(input$teacher_student_select)
+    req(reactive_data$sheet4)
+    reflection_df <- reactive_data$sheet4 %>% 
+      filter(`Student name` == input$teacher_student_select) %>% 
+      select(Reflection)
+    
+    if (nrow(reflection_df) == 0) {
+      return("No reflections found for the selected student.")
+    }
+    
+    reflection_text <- paste(reflection_df$Reflection, collapse = "\n")
+    return(reflection_text)
+  })
+  
+  # Render the reflection text
+  output$teacherReflectionText <- renderText({
+    teacher_selected_reflection()
+  })
+  
+  # Display the count of posts and discussions for the selected student
+  post_discussion_count <- reactive({
+    req(input$teacher_student_select)
+    student_data <- reactive_data$sheet3 %>% filter(`Student name` == input$teacher_student_select)
+    posts <- sum(!is.na(student_data$Post))
+    discussions <- sum(!is.na(student_data$Discussion))
+    return(paste("Posts:", posts, "\nDiscussions:", discussions))
+  })
+  
+  # Render the post and discussion count
+  output$postDiscussionCount <- renderText({
+    post_discussion_count()
+  })
+  
+  # Calculate the total grade
+  calculate_total_grade <- reactive({
+    req(input$teacher_student_select)
+    student_data <- reactive_data$sheet3 %>%
+      filter(`Student name` == input$teacher_student_select)
+    
+    posts_count <- sum(!is.na(student_data$Post))
+    discussions_count <- sum(!is.na(student_data$Discussion))
+    posts_and_discussions_grade <- ifelse(posts_count > 0 & discussions_count > 0, 25, 0)
+    
+    total_grade <- posts_and_discussions_grade + input$teacher_grade
+    return(paste("Total Grade: ", total_grade, " / 60"))
+  })
+  
+  # Render the total grade calculation
+  output$totalGrade <- renderText({
+    calculate_total_grade()
+  })
+  
+  # Automatically update the teacher's grade when it's changed
+  observeEvent(input$teacher_grade, {
+    req(input$teacher_student_select)
+    reactive_data$updated_reflections <- reactive_data$updated_reflections %>%
+      mutate(Teacher_Grade = ifelse(`Student name` == input$teacher_student_select, input$teacher_grade, Teacher_Grade))
+  })
+  
+  # When a new student is selected, initialize the grade input based on the stored value
+  observeEvent(input$teacher_student_select, {
+    req(input$teacher_student_select)
+    current_grade <- reactive_data$updated_reflections %>%
+      filter(`Student name` == input$teacher_student_select) %>%
+      pull(Teacher_Grade)
+    
+    updateNumericInput(session, "teacher_grade", value = ifelse(is.na(current_grade), 0, current_grade))
+  })
+  
+  # Check if all students have grades
+  output$allStudentsGraded <- reactive({
+    req(reactive_data$updated_reflections)
+    return(all(reactive_data$updated_reflections$Teacher_Grade > 0))
+  })
+  outputOptions(output, "allStudentsGraded", suspendWhenHidden = FALSE)
+  
+  # Load TA grades when uploaded
+  observeEvent(input$ta_file, {
+    req(input$ta_file)
+    reactive_data$ta_grades <- read_excel(input$ta_file$datapath)
+  })
+  
+  # Download data with Teacher and TA grades and calculate average
+  output$download_data_with_ta <- downloadHandler(
+    filename = function() {
+      paste("graded_reflections_with_ta", Sys.Date(), ".xlsx", sep = "")
+    },
+    content = function(file) {
+      req(reactive_data$updated_reflections, reactive_data$ta_grades)
+      
+      # Merge TA grades with Teacher grades by student name
+      merged_grades <- reactive_data$updated_reflections %>%
+        left_join(reactive_data$ta_grades, by = "Student name") %>%
+        mutate(
+          TA_Grade = ifelse(is.na(TA_Grade), 0, TA_Grade),  # Replace NA TA grades with 0
+          Average_Grade = rowMeans(cbind(Teacher_Grade, TA_Grade), na.rm = TRUE)  # Calculate average grade
+        )
+      
+      # Write the final dataset to Excel
+      write_xlsx(list(
+        "Grades" = merged_grades
+      ), file)
+    }
+  )
+}
+
+# Run the Shiny application
+shinyApp(ui = ui, server = server)
+```
+
+```{r}
+library(shiny)
+library(readxl)
+library(writexl)
+library(dplyr)
+
+# Define UI
+ui <- fluidPage(
+  titlePanel("Student Grading App"),
+  
+  # Role selection at the beginning
+  selectInput("user_role", "Are you the Teacher or Teaching Assistant?", choices = c("Teacher", "Teaching Assistant")),
+  
+  uiOutput("role_specific_ui")  # Dynamic UI based on role
+)
+
+# Define Server
+server <- function(input, output, session) {
+  
+  # Reactive values to store uploaded data and grades
+  reactive_data <- reactiveValues(
+    sheet3 = NULL,
+    sheet4 = NULL,
+    updated_reflections = NULL,
+    ta_grades = NULL
+  )
+  
+  # UI based on role selection
+  output$role_specific_ui <- renderUI({
+    req(input$user_role)  # Ensure the role is selected
+    
+    if (input$user_role == "Teacher") {
+      # UI for the teacher
+      tagList(
+        fileInput("file", "Upload Excel File", accept = c(".xlsx")),  # Upload Excel file
+        selectInput("teacher_student_select", "Select Student", choices = NULL),  # Dropdown for teacher
+        numericInput("teacher_grade", "Teacher Grade (Reflection)", value = 0, min = 0, max = 35),  # Teacher's reflection grade input
+        actionButton("clear_teacher_selection", "Clear Selection"),  # Button to clear the selected student
+        downloadButton("download_data", "Download Graded Excel")  # Button to download updated Excel
+      )
+    } else {
+      # UI for the TA
+      tagList(
+        fileInput("ta_file", "Upload Teacher Graded Excel File", accept = c(".xlsx")),  # TA uploads teacher graded Excel
+        selectInput("ta_student_select", "Select Student", choices = NULL),  # Dropdown for TA to select students
+        numericInput("ta_grade", "TA Grade (Reflection)", value = 0, min = 0, max = 35),  # TA grade input
+        actionButton("clear_ta_selection", "Clear Selection"),  # Button to clear the selected student
+        downloadButton("download_final_data", "Download Final Excel with Average Grades")  # Download final Excel with average grades
+      )
+    }
+  })
+  
+  # Load and process the Excel file for Teacher
+  observeEvent(input$file, {
+    req(input$file)  # Ensure the file is uploaded
+    
+    # Read data from the uploaded Excel file
+    reactive_data$sheet3 <- read_excel(input$file$datapath, sheet = "Discussion threads")
+    reactive_data$sheet4 <- read_excel(input$file$datapath, sheet = "Reflections")
+    
+    # Initialize updated_reflections with data from Sheet 4
+    reactive_data$updated_reflections <- reactive_data$sheet4 %>%
+      mutate(Teacher_Grade = 0)  # Add Teacher_Grade column if not present
+    
+    # Populate student dropdown
+    updateSelectInput(session, "teacher_student_select", choices = unique(reactive_data$sheet3$`Student name`))
+  })
+  
+  # Automatic grade updates for Teacher
+  observe({
+    req(input$teacher_student_select, input$teacher_grade)  # Ensure a student and grade are selected
+    reactive_data$updated_reflections <- reactive_data$updated_reflections %>%
+      mutate(Teacher_Grade = ifelse(`Student name` == input$teacher_student_select, input$teacher_grade, Teacher_Grade))
+  })
+  
+  # Clear the teacher's selection
+  observeEvent(input$clear_teacher_selection, {
+    updateSelectInput(session, "teacher_student_select", selected = NULL)  # Clear student selection
+    updateNumericInput(session, "teacher_grade", value = 0)  # Reset grade input
+  })
+  
+  # Download the graded file for Teacher
+  output$download_data <- downloadHandler(
+    filename = function() {
+      paste("graded_reflections", Sys.Date(), ".xlsx", sep = "")  # Name the downloaded file
+    },
+    content = function(file) {
+      req(reactive_data$updated_reflections)  # Ensure the updated reflection data is available
+      write_xlsx(list("Discussion and Reflections" = reactive_data$updated_reflections), file)
+    }
+  )
+  
+  # Load teacher-graded file for TA
+  observeEvent(input$ta_file, {
+    req(input$ta_file)  # Ensure the file is uploaded
+    
+    # Read the teacher's graded Excel file
+    reactive_data$updated_reflections <- read_excel(input$ta_file$datapath)
+    
+    # Populate student dropdown for TA
+    updateSelectInput(session, "ta_student_select", choices = unique(reactive_data$updated_reflections$`Student name`))
+  })
+  
+  # Automatic grade updates for TA
+  observe({
+    req(input$ta_student_select, input$ta_grade)  # Ensure a student and grade are selected
+    reactive_data$updated_reflections <- reactive_data$updated_reflections %>%
+      mutate(TA_Grade = ifelse(`Student name` == input$ta_student_select, input$ta_grade, TA_Grade))
+  })
+  
+  # Clear the TA's selection
+  observeEvent(input$clear_ta_selection, {
+    updateSelectInput(session, "ta_student_select", selected = NULL)  # Clear student selection
+    updateNumericInput(session, "ta_grade", value = 0)  # Reset grade input
+  })
+  
+  # Download final Excel with average grades
+  output$download_final_data <- downloadHandler(
+    filename = function() {
+      paste("final_reflection_grades", Sys.Date(), ".xlsx", sep = "")  # Name the downloaded file
+    },
+    content = function(file) {
+      req(reactive_data$updated_reflections)  # Ensure the updated reflection data is available
+      
+      # Calculate the average between Teacher and TA grades
+      final_data <- reactive_data$updated_reflections %>%
+        rowwise() %>%
+        mutate(Final_Average_Grade = mean(c(Teacher_Grade, TA_Grade), na.rm = TRUE))  # Average grade
+      
+      # Save the final data
+      write_xlsx(list("Final Reflection Grades" = final_data), file)
+    }
+  )
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+```
